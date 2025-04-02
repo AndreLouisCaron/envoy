@@ -78,7 +78,7 @@ Tracer::Tracer(const std::string& collector_cluster, const std::string& collecto
 
 // Tracer::TracingDriver
 
-Tracing::SpanPtr Tracer::startSpan(const Tracing::Config&, Tracing::TraceContext& trace_context,
+Tracing::SpanPtr Tracer::startSpan(const Tracing::Config& config, Tracing::TraceContext& trace_context,
                                    const StreamInfo::StreamInfo& stream_info,
                                    const std::string& operation_name,
                                    Tracing::Decision tracing_decision) {
@@ -94,7 +94,7 @@ Tracing::SpanPtr Tracer::startSpan(const Tracing::Config&, Tracing::TraceContext
   // Datadog's concept of "resource name." Datadog's "span name," or "operation
   // name," instead describes the category of operation being performed, which
   // here we hard-code.
-  span_config.name = "envoy.proxy";
+  span_config.name = TracerUtility::toString(config.operationName());
   span_config.resource = operation_name;
   span_config.start = estimateTime(stream_info.startTime());
 
