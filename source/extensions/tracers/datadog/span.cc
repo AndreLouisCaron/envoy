@@ -94,7 +94,7 @@ void Span::injectContext(Tracing::TraceContext& trace_context, const Tracing::Up
   span_->inject(writer);
 }
 
-Tracing::SpanPtr Span::spawnChild(const Tracing::Config&, const std::string& name,
+Tracing::SpanPtr Span::spawnChild(const Tracing::Config& config, const std::string& name,
                                   SystemTime start_time) {
   if (!span_) {
     // I don't expect this to happen. This means that `spawnChild` was called
@@ -109,7 +109,7 @@ Tracing::SpanPtr Span::spawnChild(const Tracing::Config&, const std::string& nam
   // instead describes the category of operation being performed, which here
   // we hard-code.
   datadog::tracing::SpanConfig config;
-  config.name = "envoy.proxy";
+  config.name = TracerUtility::toString(config.operationName());
   config.resource = name;
   config.start = estimateTime(start_time);
 
