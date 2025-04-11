@@ -108,8 +108,9 @@ TEST_F(DatadogTracerTest, NoOpMode) {
   const SystemTime start = time_.timeSystem().systemTime();
   ON_CALL(stream_info_, startTime()).WillByDefault(testing::Return(start));
 
+  Tracing::MockConfig trace_config;
   const Tracing::SpanPtr span =
-      tracer.startSpan(Tracing::MockConfig{}, context, stream_info_, operation_name, decision);
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
   ASSERT_TRUE(span);
   const auto as_null_span = dynamic_cast<Tracing::NullSpan*>(span.get());
   EXPECT_NE(nullptr, as_null_span);
@@ -140,8 +141,11 @@ TEST_F(DatadogTracerTest, SpanProperties) {
   const SystemTime start = time_.timeSystem().systemTime();
   ON_CALL(stream_info_, startTime()).WillByDefault(testing::Return(start));
 
+  Tracing::MockConfig trace_config;
+  trace_config.operation_name_ = Tracing::OperationName::Ingress;
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr span =
-      tracer.startSpan(Tracing::MockConfig{}, context, stream_info_, operation_name, decision);
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
   ASSERT_TRUE(span);
   const auto as_dd_span_wrapper = dynamic_cast<Span*>(span.get());
   EXPECT_NE(nullptr, as_dd_span_wrapper);
@@ -156,7 +160,60 @@ TEST_F(DatadogTracerTest, SpanProperties) {
   // Note that the `operation_name` we specified above becomes the
   // `resource_name()` of the resulting Datadog span, while the Datadog span's
   // `name()` (operation name) is hard-coded to "envoy.proxy."
-  EXPECT_EQ("envoy.proxy", dd_span.name());
+  EXPECT_EQ("envoy.ingress", dd_span.name());
+  EXPECT_EQ("do.thing", dd_span.resource_name());
+  EXPECT_EQ("envoy", dd_span.service_name());
+  ASSERT_TRUE(dd_span.trace_segment().sampling_decision());
+  EXPECT_EQ(int(datadog::tracing::SamplingPriority::USER_DROP),
+            dd_span.trace_segment().sampling_decision()->priority);
+  EXPECT_EQ(start, dd_span.start_time().wall);
+}
+
+TEST_F(DatadogTracerTest, SpanPropertiesEgress) {
+  // Verify that span-affecting parameters to `startSpan` are reflected in the
+  // resulting span.
+  datadog::tracing::TracerConfig config;
+  config.service = "envoy";
+  config.report_traces = false;
+  config.report_telemetry = false;
+  // Configure the tracer to keep all spans. We then override that
+  // configuration in the `Tracing::Decision`, below.
+  config.trace_sampler.sample_rate = 1.0; // 100%
+
+  Tracer tracer("fake_cluster", "test_host", config, cluster_manager_, *store_.rootScope(),
+                thread_local_slot_allocator_, time_);
+
+  Tracing::TestTraceContextImpl context{};
+  // A sampling decision of "false" forces the created trace to be dropped,
+  // which we will be able to verify by inspecting the span.
+  Tracing::Decision decision;
+  decision.reason = Tracing::Reason::Sampling;
+  decision.traced = false;
+
+  const std::string operation_name = "do.thing";
+  const SystemTime start = time_.timeSystem().systemTime();
+  ON_CALL(stream_info_, startTime()).WillByDefault(testing::Return(start));
+
+  Tracing::MockConfig trace_config;
+  trace_config.operation_name_ = Tracing::OperationName::Egress;
+  EXPECT_CALL(trace_config, operationName());
+  const Tracing::SpanPtr span =
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
+  ASSERT_TRUE(span);
+  const auto as_dd_span_wrapper = dynamic_cast<Span*>(span.get());
+  EXPECT_NE(nullptr, as_dd_span_wrapper);
+
+  const datadog::tracing::Optional<datadog::tracing::Span>& maybe_dd_span =
+      as_dd_span_wrapper->impl();
+  ASSERT_TRUE(maybe_dd_span);
+  const datadog::tracing::Span& dd_span = *maybe_dd_span;
+
+  // Verify that the span has the expected service name, operation name,
+  // resource name, start time, and sampling decision.
+  // Note that the `operation_name` we specified above becomes the
+  // `resource_name()` of the resulting Datadog span, while the Datadog span's
+  // `name()` (operation name) is hard-coded to "envoy.proxy."
+  EXPECT_EQ("envoy.egress", dd_span.name());
   EXPECT_EQ("do.thing", dd_span.resource_name());
   EXPECT_EQ("envoy", dd_span.service_name());
   ASSERT_TRUE(dd_span.trace_segment().sampling_decision());
@@ -190,8 +247,10 @@ TEST_F(DatadogTracerTest, ExtractionSuccess) {
   Tracing::TestTraceContextImpl context{{"x-datadog-trace-id", "1234"},
                                         {"x-datadog-parent-id", "5678"}};
 
+  Tracing::MockConfig trace_config;
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr span =
-      tracer.startSpan(Tracing::MockConfig{}, context, stream_info_, operation_name, decision);
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
   ASSERT_TRUE(span);
   const auto as_dd_span_wrapper = dynamic_cast<Span*>(span.get());
   EXPECT_NE(nullptr, as_dd_span_wrapper);
@@ -231,8 +290,10 @@ TEST_F(DatadogTracerTest, ExtractionFailure) {
   Tracing::TestTraceContextImpl context{{"x-datadog-trace-id", "nope"},
                                         {"x-datadog-parent-id", "nice try"}};
 
+  Tracing::MockConfig trace_config;
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr span =
-      tracer.startSpan(Tracing::MockConfig{}, context, stream_info_, operation_name, decision);
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
   ASSERT_TRUE(span);
   const auto as_dd_span_wrapper = dynamic_cast<Span*>(span.get());
   EXPECT_NE(nullptr, as_dd_span_wrapper);
@@ -357,7 +418,9 @@ TEST_F(DatadogTracerTest, EnvoySamplingVersusExtractedSampling) {
           "00-0000000000000000000000000000007b-00000000000001c8-" + flags;
     }
 
-    const Tracing::SpanPtr span = tracer.startSpan(Tracing::MockConfig{}, context, stream_info_,
+    Tracing::MockConfig trace_config;
+    EXPECT_CALL(trace_config, operationName());
+    const Tracing::SpanPtr span = tracer.startSpan(trace_config, context, stream_info_,
                                                    operation_name, envoy_decision);
     ASSERT_TRUE(span) << failure_context.str();
     const auto as_dd_span_wrapper = dynamic_cast<Span*>(span.get());

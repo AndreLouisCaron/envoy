@@ -119,8 +119,10 @@ void DatadogTracerNamingTest::serviceNameTest(const std::string& config_yaml,
   const std::string operation_name = "some.operation.name";
   Tracing::TestTraceContextImpl context{};
 
+  Tracing::MockConfig trace_config;
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr span =
-      tracer.startSpan(Tracing::MockConfig{}, context, stream_info_, operation_name, decision);
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
   const datadog::tracing::Span* dd_span;
   asDatadogSpan(&dd_span, span);
 
@@ -128,8 +130,9 @@ void DatadogTracerNamingTest::serviceNameTest(const std::string& config_yaml,
 
   const auto child_start = time_.timeSystem().systemTime();
   const std::string child_operation_name = "some.other.operation.name";
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr child =
-      span->spawnChild(Tracing::MockConfig{}, child_operation_name, child_start);
+      span->spawnChild(trace_config, child_operation_name, child_start);
   const datadog::tracing::Span* dd_child;
   asDatadogSpan(&dd_child, child);
 
@@ -186,35 +189,106 @@ TEST_F(DatadogTracerNamingTest, OperationNameAndResourceName) {
   decision.traced = true;
   Tracing::TestTraceContextImpl context{};
 
+  Tracing::MockConfig trace_config;
+  trace_config.operation_name_ = Tracing::OperationName::Ingress;
   const std::string operation_name = "some.operation.name";
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr span =
-      tracer.startSpan(Tracing::MockConfig{}, context, stream_info_, operation_name, decision);
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
   const datadog::tracing::Span* dd_span;
   asDatadogSpan(&dd_span, span);
 
-  EXPECT_EQ("envoy.proxy", dd_span->name());
+  EXPECT_EQ("envoy.ingress", dd_span->name());
   EXPECT_EQ(operation_name, dd_span->resource_name());
 
   const std::string new_operation_name = "some.new.operation.name";
   span->setOperation(new_operation_name);
 
-  EXPECT_EQ("envoy.proxy", dd_span->name());
+  EXPECT_EQ("envoy.ingress", dd_span->name());
   EXPECT_EQ(new_operation_name, dd_span->resource_name());
 
   const auto child_start = time_.timeSystem().systemTime();
   const std::string child_operation_name = "some.child.operation.name";
+  EXPECT_CALL(trace_config, operationName());
   const Tracing::SpanPtr child =
-      span->spawnChild(Tracing::MockConfig{}, child_operation_name, child_start);
+      span->spawnChild(trace_config, child_operation_name, child_start);
   const datadog::tracing::Span* dd_child;
   asDatadogSpan(&dd_child, child);
 
-  EXPECT_EQ("envoy.proxy", dd_child->name());
+  EXPECT_EQ("envoy.ingress", dd_child->name());
   EXPECT_EQ(child_operation_name, dd_child->resource_name());
 
   const std::string child_new_operation_name = "some.child.new.operation.name";
   child->setOperation(child_new_operation_name);
 
-  EXPECT_EQ("envoy.proxy", dd_child->name());
+  EXPECT_EQ("envoy.ingress", dd_child->name());
+  EXPECT_EQ(child_new_operation_name, dd_child->resource_name());
+}
+
+TEST_F(DatadogTracerNamingTest, OperationNameAndResourceNameEgress) {
+  // Concerns:
+  //
+  // - The span returned by `Tracer::startSpan` has as its resource name the
+  //   operation name passed to `Tracer::startSpan`, and has as its operation
+  //   name "envoy.proxy".
+  // - The span returned by `Span::spawnChild` has as its resource name the
+  //   operation name passed to `Tracer::spawnChild`, and has as its operation
+  //   name "envoy.proxy".
+  // - `Span::setOperation` sets the resource name of the span, but does not
+  //   change the operation name.
+
+  auto config_proto = makeConfig<envoy::config::trace::v3::DatadogConfig>(R"EOF(
+    collector_cluster: fake_cluster
+   )EOF");
+
+  Tracer tracer{config_proto.collector_cluster(),
+                config_proto.collector_hostname(),
+                DatadogTracerFactory::makeConfig(config_proto),
+                cluster_manager_,
+                *store_.rootScope(),
+                thread_local_slot_allocator_,
+                time_};
+
+  // Any values will do for the sake of this test. What we care about are the
+  // operation names and the resource names.
+  Tracing::Decision decision;
+  decision.reason = Tracing::Reason::Sampling;
+  decision.traced = true;
+  Tracing::TestTraceContextImpl context{};
+
+  Tracing::MockConfig trace_config;
+  trace_config.operation_name_ = Tracing::OperationName::Egress;
+  const std::string operation_name = "some.operation.name";
+  EXPECT_CALL(trace_config, operationName());
+  const Tracing::SpanPtr span =
+      tracer.startSpan(trace_config, context, stream_info_, operation_name, decision);
+  const datadog::tracing::Span* dd_span;
+  asDatadogSpan(&dd_span, span);
+
+  EXPECT_EQ("envoy.egress", dd_span->name());
+  EXPECT_EQ(operation_name, dd_span->resource_name());
+
+  const std::string new_operation_name = "some.new.operation.name";
+  span->setOperation(new_operation_name);
+
+  EXPECT_EQ("envoy.egress", dd_span->name());
+  EXPECT_EQ(new_operation_name, dd_span->resource_name());
+
+  const auto child_start = time_.timeSystem().systemTime();
+  const std::string child_operation_name = "some.child.operation.name";
+  EXPECT_CALL(trace_config, operationName());
+  const Tracing::SpanPtr child =
+      span->spawnChild(trace_config, child_operation_name, child_start);
+  const datadog::tracing::Span* dd_child;
+  asDatadogSpan(&dd_child, child);
+
+  EXPECT_EQ("envoy.egress", dd_child->name());
+  EXPECT_EQ(child_operation_name, dd_child->resource_name());
+
+  const std::string child_new_operation_name = "some.child.new.operation.name";
+  child->setOperation(child_new_operation_name);
+
+  EXPECT_EQ("envoy.egress", dd_child->name());
   EXPECT_EQ(child_new_operation_name, dd_child->resource_name());
 }
 

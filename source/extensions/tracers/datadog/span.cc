@@ -94,7 +94,7 @@ void Span::injectContext(Tracing::TraceContext& trace_context, const Tracing::Up
   span_->inject(writer);
 }
 
-Tracing::SpanPtr Span::spawnChild(const Tracing::Config&, const std::string& name,
+Tracing::SpanPtr Span::spawnChild(const Tracing::Config& config, const std::string& name,
                                   SystemTime start_time) {
   if (!span_) {
     // I don't expect this to happen. This means that `spawnChild` was called
@@ -108,12 +108,17 @@ Tracing::SpanPtr Span::spawnChild(const Tracing::Config&, const std::string& nam
   // concept of "resource name." Datadog's "span name," or "operation name,"
   // instead describes the category of operation being performed, which here
   // we hard-code.
-  datadog::tracing::SpanConfig config;
-  config.name = "envoy.proxy";
-  config.resource = name;
-  config.start = estimateTime(start_time);
+  datadog::tracing::SpanConfig child_config;
+  if (config.operationName() == Tracing::OperationName::Ingress) {
+    child_config.name = "envoy.ingress";
+  }
+  else {
+    child_config.name = "envoy.egress";
+  }
+  child_config.resource = name;
+  child_config.start = estimateTime(start_time);
 
-  return std::make_unique<Span>(span_->create_child(config));
+  return std::make_unique<Span>(span_->create_child(child_config));
 }
 
 void Span::setSampled(bool sampled) {

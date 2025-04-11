@@ -292,8 +292,11 @@ TEST_F(DatadogTracerSpanTest, InjectContext) {
 TEST_F(DatadogTracerSpanTest, SpawnChild) {
   const auto child_start = time_.timeSystem().systemTime();
   {
+    Tracing::MockConfig trace_config;
+    trace_config.operation_name_ = Tracing::OperationName::Ingress;
     Span parent{std::move(span_)};
-    auto child = parent.spawnChild(Tracing::MockConfig{}, "child", child_start);
+    EXPECT_CALL(trace_config, operationName());
+    auto child = parent.spawnChild(trace_config, "child", child_start);
     child->finishSpan();
     parent.finishSpan();
   }
@@ -309,7 +312,36 @@ TEST_F(DatadogTracerSpanTest, SpawnChild) {
   // Envoy's notion of operation name more closely matches Datadog's notion of
   // resource name. The actual operation name is hard-coded as "envoy.proxy".
   EXPECT_EQ("child", child.resource);
-  EXPECT_EQ("envoy.proxy", child.name);
+  EXPECT_EQ("envoy.ingress", child.name);
+  EXPECT_EQ(id_, child.trace_id);
+  EXPECT_EQ(id_, child.span_id);
+  EXPECT_EQ(id_, child.parent_id);
+}
+
+TEST_F(DatadogTracerSpanTest, SpawnChildEgress) {
+  const auto child_start = time_.timeSystem().systemTime();
+  {
+    Tracing::MockConfig trace_config;
+    trace_config.operation_name_ = Tracing::OperationName::Egress;
+    Span parent{std::move(span_)};
+    EXPECT_CALL(trace_config, operationName());
+    auto child = parent.spawnChild(trace_config, "child", child_start);
+    child->finishSpan();
+    parent.finishSpan();
+  }
+
+  EXPECT_EQ(1, collector_->chunks.size());
+  const auto& spans = collector_->chunks[0];
+  EXPECT_EQ(2, spans.size());
+  const auto& child_ptr = spans[1];
+  EXPECT_NE(nullptr, child_ptr);
+  const datadog::tracing::SpanData& child = *child_ptr;
+  EXPECT_EQ(estimateTime(child_start).wall, child.start.wall);
+  // Setting the operation name actually sets the resource name, because
+  // Envoy's notion of operation name more closely matches Datadog's notion of
+  // resource name. The actual operation name is hard-coded as "envoy.proxy".
+  EXPECT_EQ("child", child.resource);
+  EXPECT_EQ("envoy.egress", child.name);
   EXPECT_EQ(id_, child.trace_id);
   EXPECT_EQ(id_, child.span_id);
   EXPECT_EQ(id_, child.parent_id);
@@ -327,9 +359,11 @@ TEST_F(DatadogTracerSpanTest, SetSampledTrue) {
     span_.trace_segment().override_sampling_priority(
         static_cast<int>(datadog::tracing::SamplingPriority::USER_DROP));
 
+    Tracing::MockConfig trace_config;
     Span local_root{std::move(span_)};
+    EXPECT_CALL(trace_config, operationName());
     auto child =
-        local_root.spawnChild(Tracing::MockConfig{}, "child", time_.timeSystem().systemTime());
+        local_root.spawnChild(trace_config, "child", time_.timeSystem().systemTime());
     child->setSampled(true);
     child->finishSpan();
     local_root.finishSpan();
@@ -358,9 +392,11 @@ TEST_F(DatadogTracerSpanTest, SetSampledFalse) {
     span_.trace_segment().override_sampling_priority(
         static_cast<int>(datadog::tracing::SamplingPriority::USER_KEEP));
 
+    Tracing::MockConfig trace_config;
     Span local_root{std::move(span_)};
+    EXPECT_CALL(trace_config, operationName());
     auto child =
-        local_root.spawnChild(Tracing::MockConfig{}, "child", time_.timeSystem().systemTime());
+        local_root.spawnChild(trace_config, "child", time_.timeSystem().systemTime());
     child->setSampled(false);
     child->finishSpan();
     local_root.finishSpan();
@@ -421,8 +457,9 @@ TEST_F(DatadogTracerSpanTest, NoOpMode) {
   EXPECT_EQ("", context.context_path_);
   EXPECT_EQ("", context.context_method_);
   EXPECT_EQ(0, context.context_map_.size());
+  Tracing::MockConfig trace_config;
   const Tracing::SpanPtr child =
-      span.spawnChild(Tracing::MockConfig{}, "child", time_.timeSystem().systemTime());
+      span.spawnChild(trace_config, "child", time_.timeSystem().systemTime());
   EXPECT_NE(nullptr, child);
   const Tracing::Span& child_span = *child;
   EXPECT_EQ(typeid(Tracing::NullSpan), typeid(child_span));
